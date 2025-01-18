@@ -1,138 +1,174 @@
+# file_chunker.py
 import os
-import logging
-import pickle
-from typing import Dict, Tuple, Callable, List
-from tqdm import tqdm
-from transformers import pipeline
-from transformers import BartForConditionalGeneration, BartTokenizer
-import logging
+import json
+import csv
+import docx
+import PyPDF2
+from typing import List, Optional
+from pathlib import Path
 
-CHUNKING_METHODS = {
-    "sentence": lambda text, chunk_size, **kwargs: split_text_sentence_based(text, chunk_size),
-    "token": lambda text, chunk_size, **kwargs: split_text_token_based(text, chunk_size),
-    "sliding": lambda text, chunk_size, **kwargs: split_text_sliding_window(text, chunk_size, kwargs.get('overlap', 50)),
-    "semantic": lambda text, chunk_size, **kwargs: split_text_semantic(text, chunk_size)
-}
-
-def split_text_sentence_based(text: str, chunk_size: int = 200) -> List[str]:
-    """Split text into chunks based on sentence boundaries."""
-    sentences = text.split('. ')
-    chunks = []
-    current_chunk = []
-    current_length = 0
-    for sentence in sentences:
-        sentence_length = len(sentence.split())
-        if current_length + sentence_length <= chunk_size:
-            current_chunk.append(sentence)
-            current_length += sentence_length
+class FileChunker:
+    """Simple utility to split various file types into smaller text chunks."""
+    
+    def __init__(
+        self, 
+        input_file: str, 
+        chunk_size: int = 500, 
+        method: str = "sentence",
+        output_dir: Optional[str] = None
+    ):
+        """
+        Initialize the file chunker.
+        
+        Args:
+            input_file: Path to the file to chunk
+            chunk_size: Approximate number of words per chunk
+            method: Chunking method - "sentence" or "token"
+            output_dir: Custom output directory (optional)
+        """
+        self.input_file = Path(input_file)
+        self.chunk_size = chunk_size
+        self.method = method
+        
+        # Validate input file
+        if not self.input_file.exists():
+            raise FileNotFoundError(f"File not found: {input_file}")
+            
+        if method not in ["sentence", "token"]:
+            raise ValueError("Method must be either 'sentence' or 'token'")
+            
+        # Set up output directory
+        if output_dir:
+            self.output_dir = Path(output_dir)
         else:
-            chunks.append('. '.join(current_chunk))
-            current_chunk = [sentence]
-            current_length = sentence_length
-    if current_chunk:
-        chunks.append('. '.join(current_chunk))
-    return chunks
-
-def split_text_token_based(text: str, chunk_size: int = 500) -> List[str]:
-    """Split text into chunks based on token count."""
-    words = text.split()
-    chunks = [' '.join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
-    return chunks
-
-def split_text_sliding_window(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-    """Split text using a sliding window approach."""
-    words = text.split()
-    chunks = []
-    for i in range(0, len(words), chunk_size - overlap):
-        chunk = ' '.join(words[i:i + chunk_size])
-        chunks.append(chunk)
-        if i + chunk_size >= len(words):
-            break
-    return chunks
-
-
-
-from transformers import BartForConditionalGeneration, BartTokenizer
-import logging
-from typing import List
-
-def split_text_semantic(text: str, chunk_size: int = 500) -> List[str]:
-    """Split text based on semantic boundaries using a smaller pre-trained model."""
-    try:
-        # Use a smaller model for summarization (Distilled BART)
-        model = BartForConditionalGeneration.from_pretrained("facebook/bart-base")
-        tokenizer = BartTokenizer.from_pretrained("facebook/bart-base")
-    except Exception as e:
-        logging.error(f"Error loading model or tokenizer: {e}")
-        return split_text_sentence_based(text, chunk_size)  # Fallback to sentence-based splitting
-
-    sentences = text.split('. ')
-    chunks = []
-    current_chunk = []
-    current_length = 0
-
-    for sentence in sentences:
-        sentence_length = len(sentence.split())
-        if current_length + sentence_length <= chunk_size:
-            current_chunk.append(sentence)
-            current_length += sentence_length
+            # Create default output directory next to the input file
+            default_dir = self.input_file.parent / "chunks" / self.input_file.stem
+            self.output_dir = default_dir
+            
+        # Create output directory if it doesn't exist
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def read_file(self) -> str:
+        """Read content from various file formats."""
+        suffix = self.input_file.suffix.lower()
+        
+        try:
+            if suffix == '.txt':
+                return self._read_text_file()
+            elif suffix == '.pdf':
+                return self._read_pdf_file()
+            elif suffix == '.docx':
+                return self._read_docx_file()
+            elif suffix == '.json':
+                return self._read_json_file()
+            elif suffix == '.csv':
+                return self._read_csv_file()
+            elif suffix in ['.md', '.markdown']:
+                return self._read_text_file()
+            else:
+                raise ValueError(f"Unsupported file format: {suffix}")
+        except Exception as e:
+            raise Exception(f"Error reading {self.input_file}: {str(e)}")
+    
+    def _read_text_file(self) -> str:
+        """Read content from text files (txt, md)."""
+        with open(self.input_file, 'r', encoding='utf-8') as f:
+            return f.read()
+    
+    def _read_pdf_file(self) -> str:
+        """Read content from PDF files."""
+        text = []
+        with open(self.input_file, 'rb') as f:
+            pdf = PyPDF2.PdfReader(f)
+            for page in pdf.pages:
+                text.append(page.extract_text())
+        return ' '.join(text)
+    
+    def _read_docx_file(self) -> str:
+        """Read content from Word documents."""
+        doc = docx.Document(self.input_file)
+        return ' '.join([paragraph.text for paragraph in doc.paragraphs])
+    
+    def _read_json_file(self) -> str:
+        """Read content from JSON files."""
+        with open(self.input_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            # Handle different JSON structures
+            if isinstance(data, str):
+                return data
+            elif isinstance(data, dict):
+                return ' '.join(str(value) for value in data.values())
+            elif isinstance(data, list):
+                return ' '.join(str(item) for item in data)
+            else:
+                return str(data)
+    
+    def _read_csv_file(self) -> str:
+        """Read content from CSV files."""
+        text = []
+        with open(self.input_file, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                text.append(' '.join(str(cell) for cell in row))
+        return ' '.join(text)
+    
+    def chunk_by_sentences(self, text: str) -> List[str]:
+        """Split text into chunks at sentence boundaries."""
+        sentences = text.split('. ')
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        for sentence in sentences:
+            sentence_length = len(sentence.split())
+            if current_length + sentence_length <= self.chunk_size:
+                current_chunk.append(sentence)
+                current_length += sentence_length
+            else:
+                chunks.append('. '.join(current_chunk) + '.')
+                current_chunk = [sentence]
+                current_length = sentence_length
+                
+        if current_chunk:
+            chunks.append('. '.join(current_chunk) + '.')
+        return chunks
+    
+    def chunk_by_tokens(self, text: str) -> List[str]:
+        """Split text into chunks of fixed word count."""
+        words = text.split()
+        chunks = []
+        
+        for i in range(0, len(words), self.chunk_size):
+            chunk = ' '.join(words[i:i + self.chunk_size])
+            chunks.append(chunk)
+        return chunks
+    
+    def save_chunks(self) -> List[Path]:
+        """
+        Process the input file and save chunks.
+        
+        Returns:
+            List of paths to the created chunk files
+        """
+        # Read input file
+        print(f"Reading {self.input_file}...")
+        text = self.read_file()
+        
+        # Generate chunks
+        print("Generating chunks...")
+        if self.method == "sentence":
+            chunks = self.chunk_by_sentences(text)
         else:
-            chunk_text = '. '.join(current_chunk)
-            try:
-                # Tokenize and summarize the chunk directly
-                inputs = tokenizer(chunk_text, return_tensors="pt", max_length=1024, truncation=True)
-                summary_ids = model.generate(inputs["input_ids"], max_length=chunk_size, min_length=chunk_size // 2, length_penalty=2.0, num_beams=4, early_stopping=True)
-                summarized = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-                chunks.append(summarized)
-            except Exception as e:
-                logging.error(f"Error summarizing chunk: {e}")
-                chunks.append(chunk_text)  # Fallback to original chunk
-            current_chunk = [sentence]
-            current_length = sentence_length
-
-    if current_chunk:
-        chunk_text = '. '.join(current_chunk)
-        try:
-            # Tokenize and summarize the last chunk directly
-            inputs = tokenizer(chunk_text, return_tensors="pt", max_length=1024, truncation=True)
-            summary_ids = model.generate(inputs["input_ids"], max_length=chunk_size, min_length=chunk_size // 2, length_penalty=2.0, num_beams=4, early_stopping=True)
-            summarized = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-            chunks.append(summarized)
-        except Exception as e:
-            logging.error(f"Error summarizing last chunk: {e}")
-            chunks.append(chunk_text)  # Fallback to original chunk
-
-    return chunks
-
-
-
-def chunk_markdown_files(md_dir: str, chunking_method: str, chunk_size: int = 500, **kwargs) -> Dict[Tuple[int, int], str]:
-    """Chunk markdown files from a directory using the chosen method and save them as separate files."""
-    if chunking_method not in CHUNKING_METHODS:
-        raise ValueError(f"Invalid chunking method. Choose from: {list(CHUNKING_METHODS.keys())}")
-
-    chunk_mapping = {}
-    md_files = sorted([f for f in os.listdir(md_dir) if f.lower().endswith('.md')])
-
-    for doc_id, md_file in enumerate(tqdm(md_files), 1):
-        md_path = os.path.join(md_dir, md_file)
-        try:
-            with open(md_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            chunks = CHUNKING_METHODS[chunking_method](content, chunk_size, **kwargs)
-            for chunk_idx, chunk in enumerate(chunks):
-                chunk_filename = f"document_{doc_id}_chunk_{chunk_idx}.md"
-                chunk_path = os.path.join(md_dir, chunk_filename)
-                with open(chunk_path, 'w', encoding='utf-8') as f:
-                    f.write(chunk)
-                chunk_mapping[(doc_id, chunk_idx)] = chunk_path
-
-        except Exception as e:
-            logging.error(f"Error chunking document {md_path}: {str(e)}")
-
-    mapping_path = os.path.join(md_dir, "chunk_mapping.pkl")
-    with open(mapping_path, 'wb') as f:
-        pickle.dump(chunk_mapping, f)
-
-    return chunk_mapping
+            chunks = self.chunk_by_tokens(text)
+        
+        # Save chunks
+        chunk_files = []
+        print(f"Saving chunks to {self.output_dir}...")
+        
+        for i, chunk in enumerate(chunks, 1):
+            chunk_path = self.output_dir / f"chunk_{i}.txt"
+            chunk_path.write_text(chunk, encoding='utf-8')
+            chunk_files.append(chunk_path)
+            print(f"Created: {chunk_path}")
+        
+        return chunk_files
