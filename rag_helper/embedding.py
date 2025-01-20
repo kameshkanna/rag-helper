@@ -1,9 +1,8 @@
-# easy_embeddings.py
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Dict
 import pickle
 import logging
-
+from dataclasses import dataclass
 
 @dataclass
 class ModelInfo:
@@ -187,7 +186,7 @@ class EasyEmbeddings:
             elif self.model_info.type == "openai":
                 import openai
                 openai.api_key = self.api_keys["openai"]
-                self.model = openai.OpenAI()
+                self.model = openai
                 
             elif self.model_info.type == "cohere":
                 import cohere
@@ -223,11 +222,11 @@ class EasyEmbeddings:
             elif self.model_info.type == "openai":
                 embeddings = []
                 for text in texts:
-                    response = self.model.embeddings.create(
+                    response = self.model.Embedding.create(
                         model=self.model_name,
                         input=text
                     )
-                    embeddings.append(response.data[0].embedding)
+                    embeddings.append(response['data'][0]['embedding'])
                 embeddings = np.array(embeddings)
                 
             elif self.model_info.type == "cohere":
