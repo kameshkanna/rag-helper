@@ -169,6 +169,6 @@ class FileChunker:
             chunk_path = self.output_dir / f"chunk_{i}.txt"
             chunk_path.write_text(chunk, encoding='utf-8')
             chunk_files.append(chunk_path)
-            print(f"Created: {chunk_path}")
+            print(f"Created: {chunk_path}") #yess
         
         return chunk_files
